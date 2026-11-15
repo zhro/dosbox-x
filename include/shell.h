@@ -107,6 +107,9 @@ private:
 	void ProcessCmdLineEnvVarStitution(char * line);
 	std::string hasAssociation(const char* name);
 	static bool hasExecutableExtension(const char* name);
+	// Conservative, side-effect-free preflight for output redirection.
+	enum class RedirectCommandStatus { Found, NotFound, Unknown };
+	RedirectCommandStatus ResolveRedirectCommand(const char* line);
 
 public:
 

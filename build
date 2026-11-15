@@ -1,6 +1,34 @@
 #!/usr/bin/env bash
 
-# Build options are handled here rather than forwarded to configure.
+# Handle cleanup before dependency checks, autotools, or compilation
+case "${1:-}" in
+    # Pass-through cleanup targets to Make
+    clean|distclean|mostlyclean)
+        if [ "$#" -ne 1 ]; then
+            echo "Usage: ./build {clean|distclean|mostlyclean}" >&2
+            exit 1
+        fi
+
+        # Require existing top-level Makefile
+        if [ ! -f Makefile ]; then
+            echo "Cannot run $1: no Makefile found in the project root." >&2
+            exit 1
+        fi
+
+        # Cleanup does not require regenerating the build configuration;
+        # refresh existing generated files to prevent an autotools recheck
+        for generated in config.status Makefile src/Makefile; do
+            if [ -f "$generated" ]; then
+                touch "$generated" || exit 1
+            fi
+        done
+
+        echo "Cleaning DOSBox-X build tree (make $1)"
+        exec make --no-print-directory "$1"
+        ;;
+esac
+
+# Build options are handled here, rather than forwarded to configure
 build32=no
 configure_args=()
 for arg in "$@"; do
@@ -10,7 +38,7 @@ for arg in "$@"; do
     esac
 done
 
-# Verify all Cygwin build dependencies before starting any build steps.
+# Verify all Cygwin build dependencies before starting any build steps
 check_cygwin_dependencies() {
     local arch=$1 package
     local -a packages missing
@@ -50,8 +78,7 @@ check_cygwin_dependencies() {
     echo "All required Cygwin packages are installed"
 }
 
-# Set up cross-compilation before invoking any bundled build scripts.
-# The bundled scripts inherit CC, CXX, PATH, CPPFLAGS and LDFLAGS.
+# Set up cross-compilation before invoking any bundled build scripts
 cygwin_build=no
 case "$(uname -s)" in
     CYGWIN*)
@@ -95,7 +122,7 @@ case "$(uname -s)" in
         configure_args+=("--host=$triplet")
         ;;
     *)
-        # Original '32' behavior for non-Cygwin systems.
+        # Original '32' behavior for non-Cygwin systems
         if [ "$build32" = yes ]; then
             export CC="$(command -v gcc) -m32"
             export CXX="$(command -v g++) -m32"
@@ -116,14 +143,14 @@ fi
 
 # I'm sick and tired of all the churn the three versions of autoconf
 # are causing in this repo. Stop committing the configure scripts
-# and just autoregen.
+# and just autoregen
 ./autogen.sh || exit 1
 
-# fix
+# Fix
 chmod +x vs/sdl/build-scripts/strip_fPIC.sh
 
 if [ "$cygwin_build" = yes ]; then
-    # Use an absolute path so all bundled build scripts inherit it.
+    # Use an absolute path so all bundled build scripts inherit it
     png_prefix="$(pwd)/vs/libpng/linux-host"
     export CPPFLAGS="-I$png_prefix/include ${CPPFLAGS:-}"
     export LDFLAGS="-L$png_prefix/lib ${LDFLAGS:-}"
@@ -131,15 +158,14 @@ if [ "$cygwin_build" = yes ]; then
     (cd vs/libpng && ./build-dosbox.sh) || exit 1
 fi
 
-# prefer to compile against our own copy of SDL 1.x
+# Prefer to compile against our own copy of SDL 1.x
 echo "Compiling our internal SDL 1.x"
 (cd vs/sdl && ./build-dosbox.sh) || exit 1
 
-# prefer to compile against our own copy of SDLnet 1.x
+# Prefer to compile against our own copy of SDLnet 1.x
 echo "Compiling our internal SDLnet 1.x"
 (cd vs/sdlnet && ./build-dosbox.sh) || exit 1
 
-# now compile ourself
 echo "Compiling DOSBox-X"
 chmod +x configure
 ./configure --enable-debug --prefix=/usr "${configure_args[@]}" || exit 1

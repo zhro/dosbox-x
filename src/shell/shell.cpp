@@ -499,6 +499,57 @@ public:
 	bool WriteToControlChannel(PhysPt bufptr,uint16_t size,uint16_t * retcode) override { (void)bufptr; (void)size; (void)retcode; return false; }
 };
 
+extern SHELL_Cmd cmd_list[];
+extern bool enable_config_as_shell_commands;
+
+DOS_Shell::RedirectCommandStatus DOS_Shell::ResolveRedirectCommand(const char* line) {
+	// Only classify a simple, unquoted command name.  Leave complex DOSBox-X
+	// syntax to DoCommand rather than risk rejecting a valid command.
+	while (*line == ' ' || *line == '\t') ++line;
+	const char* begin = line;
+	while (*line && *line != ' ' && *line != '\t' && *line != '=') {
+		const unsigned char c = static_cast<unsigned char>(*line);
+		if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		      (c >= '0' && c <= '9') || c == '_' || c == '-' ||
+		      c == '.' || c == '$'))
+			return RedirectCommandStatus::Unknown;
+		++line;
+	}
+	const size_t len = static_cast<size_t>(line - begin);
+	if (!len || len >= DOS_PATHLENGTH - 4)
+		return RedirectCommandStatus::Unknown;
+
+	char name[DOS_PATHLENGTH + 4];
+	memcpy(name, begin, len);
+	name[len] = '\0';
+	// Dots can trigger internal-command prefix parsing (for example CD..).
+	// Only classify dotted names with an executable extension.
+	const char* dot = strchr(name, '.');
+	if (dot && strcasecmp(dot, ".COM") && strcasecmp(dot, ".EXE") &&
+	    strcasecmp(dot, ".BAT"))
+		return RedirectCommandStatus::Unknown;
+
+	// DoCommand handles internal commands before searching for programs.
+	for (unsigned int i = 0; cmd_list[i].name; ++i) {
+		if (!strcasecmp(cmd_list[i].name, name))
+			return RedirectCommandStatus::Found;
+	}
+
+	// Alias expansion, config commands, and fallback handlers may change
+	// the meaning of a name.  Do not preempt any of those execution paths.
+	if (cmd_alias.find(name) != cmd_alias.end() ||
+	    enable_config_as_shell_commands)
+		return RedirectCommandStatus::Unknown;
+	const Section_prop* sec = static_cast<Section_prop*>(control->GetSection("dos"));
+	if (sec->Get_string("badcommandhandler")[0] != '\0')
+		return RedirectCommandStatus::Unknown;
+
+	// Which() performs the same .COM/.EXE/.BAT and PATH lookup as Execute().
+	// It may modify its argument, hence the writable buffer above.
+	return Which(name) ? RedirectCommandStatus::Found
+	                   : RedirectCommandStatus::NotFound;
+}
+
 void DOS_Shell::ParseLine(char * line) {
 	LOG(LOG_EXEC,LOG_DEBUG)("Parsing command line: %s",line);
 	/* Check for a leading @ */
@@ -525,6 +576,17 @@ void DOS_Shell::ParseLine(char * line) {
 		if(in) free(in);
 		if(out) free(out);
 		if(toc) free(toc);
+		return;
+	}
+
+	// A missing command must not create a new redirected file or truncate an
+	// existing one.  MS-DOS 6.22 does this for both > and >>.  Only suppress
+	// redirection when lookup is definitive; otherwise use the existing path.
+	if (out && !toc &&
+	    ResolveRedirectCommand(line) == RedirectCommandStatus::NotFound) {
+		free(in);
+		free(out);
+		DoCommand(line); // Existing CON error reporting (PR #6828).
 		return;
 	}
 

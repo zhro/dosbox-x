@@ -703,8 +703,10 @@ bool DOS_BreakTest(bool print=true) {
 		    uint16_t key;
 		    if (INT16_peek_key(key) && key == 0)
 		        INT16_get_key(key);
-		    ctrlbrk = false;
 		}
+
+		// CON output must not dispatch a break DOS is already handling.
+		ctrlbrk = false;
 
 		/* print ^C on the console */
 		if (print) DOS_PrintCBreak();
@@ -1279,9 +1281,6 @@ static Bitu DOS_21Handler(void) {
                 uint8_t c;uint16_t n=1;
                 DOS_ReadFile (STDIN,&c,&n);
                 if (c == 3) {
-					// Consume the keyboard break latch before printing ^C
-					// so the console write cannot dispatch the same break.
-					ctrlbrk = false;
                     DOS_BreakAction();
                     if (!DOS_BreakTest()) return CBRET_NONE;
                 }

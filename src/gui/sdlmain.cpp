@@ -2050,9 +2050,43 @@ Bitu GFX_GetBestMode(Bitu flags)
 }
 #endif
 
+#if defined(WIN32) && !defined(HX_DOS)
+static HHOOK ctrl_break_message_hook = nullptr;
+enum { SDL_USER_CTRL_BREAK = 1 };
+
+static LRESULT CALLBACK WinCtrlBreakMessageProc(int code, WPARAM wparam, LPARAM lparam) {
+    if (code == HC_ACTION && wparam == PM_REMOVE) {
+        auto &msg = *reinterpret_cast<MSG *>(lparam);
+        const bool pressed = msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN;
+        const bool released = msg.message == WM_KEYUP || msg.message == WM_SYSKEYUP;
+        if ((pressed || released) && msg.wParam == VK_CANCEL && msg.hwnd &&
+            msg.hwnd == GetFocus() &&
+            (msg.hwnd == GetHWND() || msg.hwnd == GetSurfaceHWND())) {
+            if (pressed && !(msg.lParam & (1L << 30))) {
+                SDL_Event event = {};
+                event.type = SDL_USEREVENT;
+                event.user.code = SDL_USER_CTRL_BREAK;
+                SDL_PushEvent(&event);
+            }
+            // SDL1 can translate this as Break and SDL2 as Scroll Lock.
+            msg.message = WM_NULL;
+        }
+    }
+    return CallNextHookEx(nullptr, code, wparam, lparam);
+}
+#endif
+
 /* FIXME: This prepares the SDL library to accept Win32 drag+drop events from the Windows shell.
  *        So it should be named something like EnableDragAcceptFiles() not SDL_Prepare() */
 void SDL_Prepare(void) {
+#if defined(WIN32) && !defined(HX_DOS)
+    ctrl_break_message_hook = SetWindowsHookEx(WH_GETMESSAGE,
+                                               WinCtrlBreakMessageProc,
+                                               nullptr,
+                                               GetCurrentThreadId());
+    if (!ctrl_break_message_hook)
+        LOG_MSG("Win32: Unable to install Ctrl+Break message hook (%lu)", GetLastError());
+#endif
     if (menu_compatible) return;
 
 #if defined(WIN32) && !defined(HX_DOS) // Microsoft Windows specific
@@ -3723,10 +3757,7 @@ void SendKey(std::string key) {
         KEYBOARD_AddKey(KBD_leftctrl, false);
         KEYBOARD_AddKey(KBD_esc, false);
     } else if (key == "sendkey_ctrlbreak") {
-        KEYBOARD_AddKey(KBD_leftctrl, true);
-        KEYBOARD_AddKey(KBD_pause, true);
-        KEYBOARD_AddKey(KBD_leftctrl, false);
-        KEYBOARD_AddKey(KBD_pause, false);
+        KEYBOARD_AddCtrlBreak();
     } else if (key == "sendkey_cad") {
         KEYBOARD_AddKey(KBD_leftctrl, true);
         KEYBOARD_AddKey(KBD_leftalt, true);
@@ -6010,6 +6041,10 @@ void GFX_Events() {
 
         switch (event.type) {
 #if defined(WIN32) && !defined(HX_DOS)
+        case SDL_USEREVENT:
+            if (event.user.code == SDL_USER_CTRL_BREAK && sdl.desktop.type != SCREEN_GAMELINK)
+                KEYBOARD_AddCtrlBreak();
+            break;
         case SDL_SYSWMEVENT:
             switch( event.syswm.msg->msg.win.msg ) {
                 case WM_COMMAND:
@@ -6443,6 +6478,12 @@ void GFX_Events() {
         /* end patch fragment */
 
         switch (event.type) {
+#if defined(WIN32) && !defined(HX_DOS)
+        case SDL_USEREVENT:
+            if (event.user.code == SDL_USER_CTRL_BREAK && sdl.desktop.type != SCREEN_GAMELINK)
+                KEYBOARD_AddCtrlBreak();
+            break;
+#endif
 #ifdef __WIN32__
         case SDL_SYSWMEVENT : {
             switch( event.syswm.msg->msg ) {
@@ -10799,6 +10840,10 @@ fresh_boot:
         SDL_CDROMQuit();
 #endif
 
+#if defined(WIN32) && !defined(HX_DOS)
+        if (ctrl_break_message_hook)
+            UnhookWindowsHookEx(ctrl_break_message_hook);
+#endif
         SDL_Quit();//Let's hope sdl will quit as well when it catches an exception
 
 #if defined(WIN32) && !defined(HX_DOS) && !defined(_WIN32_WINDOWS)

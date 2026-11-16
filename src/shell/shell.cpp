@@ -67,6 +67,7 @@ extern bool startcmd, startwait, startquiet, internal_program;
 extern bool addovl, addipx, addne2k, enableime, showdbcs;
 extern bool halfwidthkana, force_conversion, gbk, uselangcp, chinasea;
 extern bool ctrlbrk;
+extern bool DOS_BreakFlag, DOS_BreakConioFlag;
 extern int enablelfn, msgcodepage, lastmsgcp;
 extern uint16_t countryNo;
 extern unsigned int dosbox_shell_env_size;
@@ -1586,6 +1587,8 @@ bool DOS_Shell::CheckBatchBreak(void) {
     if(!bf || !ctrlbrk) return false;
 
     ctrlbrk = false;
+    DOS_BreakFlag = false;
+    DOS_BreakConioFlag = false;
     std::string prompt = formatString("Terminate batch job (%c/%c)?",
         (char)toupper(char_yes), (char)toupper(char_no));
 

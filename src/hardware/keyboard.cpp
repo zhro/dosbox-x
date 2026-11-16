@@ -1902,6 +1902,40 @@ static void KEYBOARD_TickHandler(void) {
 
 void APM_Suspend_Wakeup_Key(void);
 
+void KEYBOARD_AddCtrlBreak() {
+    if (keyb.reset)
+        return;
+
+    if (IS_PC98_ARCH) {
+        KEYBOARD_AddKey(KBD_stop, true);
+        KEYBOARD_AddKey(KBD_stop, false);
+        return;
+    }
+    if (machine == MCH_PCJR || (!keyb.cb_xlat && keyb.scanset == 3)) {
+        // These keyboards use the existing Ctrl+Pause combination.
+        const bool send_ctrl = machine != MCH_PCJR ||
+                               (!keyb.leftctrl_pressed && !keyb.rightctrl_pressed);
+        if (send_ctrl)
+            KEYBOARD_AddKey(KBD_leftctrl, true);
+        KEYBOARD_AddKey(KBD_pause, true);
+        if (send_ctrl)
+            KEYBOARD_AddKey(KBD_leftctrl, false);
+        KEYBOARD_AddKey(KBD_pause, false);
+        return;
+    }
+
+    // Ctrl+Break sends its own make and break codes on the press.
+    const bool set2 = !keyb.cb_xlat && keyb.scanset == 2;
+    KEYBOARD_AddBuffer(0xe0);
+    KEYBOARD_AddBuffer(set2 ? 0x7e : 0x46);
+    KEYBOARD_AddBuffer(0xe0);
+    if (set2)
+        KEYBOARD_AddBuffer(0xf0);
+    KEYBOARD_AddBuffer(set2 ? 0x7e : 0xc6);
+    keyb.repeat.key = KBD_NONE;
+    keyb.repeat.wait = 0;
+}
+
 void KEYBOARD_AddKey(KBD_KEYS keytype,bool pressed) {
     /* If the BIOS has put the system into APM suspend, let certain keys wake it up again.
      * Send on RELEASE so that the key isn't also typed into the guest OS. */

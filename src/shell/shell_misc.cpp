@@ -1048,6 +1048,10 @@ void DOS_Shell::InputCommand(char * line) {
                 if (l_completion.size()) l_completion.clear(); //reset the completion list.
                 size = 0;       // stop the next loop
                 str_len = 0;    // prevent multiple adds of the same line
+                if (echo && ctrlbrk) {
+                    ctrlbrk = false;
+                    WriteOut("^C"); // Run() supplies the newline.
+                }
                 DOS_BreakFlag = false; // clear break flag so the next program doesn't get hit with it
                 DOS_BreakConioFlag = false;
                 break;

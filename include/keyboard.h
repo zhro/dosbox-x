@@ -77,6 +77,7 @@ enum KBD_KEYS {
 
 void KEYBOARD_ClrBuffer(void);
 void KEYBOARD_AddKey(KBD_KEYS keytype,bool pressed);
+void KEYBOARD_AddCtrlBreak();
 size_t KEYBOARD_BufferSpaceAvail();  // emendelson from dbDOS
 
 #endif

@@ -1249,7 +1249,12 @@ static Bitu DOS_21Handler(void) {
             {
                 uint8_t c;uint16_t n=1;
                 DOS_ReadFile (STDIN,&c,&n);
-                if (c == 3) {
+                if(c == 3 && ctrlbrk) {
+                    const auto handle = RealHandle(STDIN);
+                    if(handle < DOS_FILES && Files[handle] &&
+                        Files[handle]->IsName("CON")) {
+                        ctrlbrk = false; // Reset Ctrl+C/Break latch because CON input already consumed it 
+                    }
                     DOS_BreakAction();
                     if (!DOS_BreakTest()) return CBRET_NONE;
                 }

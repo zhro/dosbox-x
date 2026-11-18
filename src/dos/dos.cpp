@@ -196,6 +196,8 @@ void ShutFontHandle(void);
 void DOSBox_SetSysMenu(void);
 void runRescan(const char *str);
 bool GFX_GetPreventFullscreen(void);
+bool INT16_peek_key(uint16_t& code);
+bool INT16_get_key(uint16_t& code);
 
 bool DOS_IS_IN_HMA() {
 	if (dos_in_hma && XMS_IS_ACTIVE() && XMS_HMA_EXISTS())
@@ -675,6 +677,14 @@ bool DOS_BreakTest(bool print=true) {
 		bool terminate = true;
 		bool terminint23 = false;
 		Bitu save_sp = reg_sp;
+
+        // Consume the BIOS Ctrl+Break marker before dispatching INT 23h.
+        if(DOS_BreakConioFlag && !IS_PC98_ARCH) {
+            uint16_t key;
+            if(INT16_peek_key(key) && key == 0)
+                INT16_get_key(key);
+            ctrlbrk = false;
+        }
 
 		/* print ^C on the console */
 		if (print) DOS_PrintCBreak();

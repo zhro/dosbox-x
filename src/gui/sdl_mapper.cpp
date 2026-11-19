@@ -1289,6 +1289,11 @@ SDLKey MapSDLCode(Bitu skey) {
 }
 
 Bitu GetKeyCode(SDL_keysym keysym) {
+#if defined(WIN32)
+    if (keysym.sym == SDLK_BREAK ||
+        (GFX_SDLUsingWinDIB() && keysym.win32_vk == VK_CANCEL))
+        return SDLK_PAUSE;
+#endif
     // LOG_MSG("GetKeyCode %X %X %X",keysym.scancode,keysym.sym,keysym.mod);
     if (useScanCode()) {
         SDLKey key = SDLK_UNKNOWN;
@@ -1313,10 +1318,6 @@ Bitu GetKeyCode(SDL_keysym keysym) {
                 if (keysym.sym) {
 				    key = (keysym.sym <= SDLK_LAST ? keysym.sym : SDLK_UNKNOWN);
 			    }
-#if defined (WIN32)
-                if(keysym.sym == SDLK_BREAK)
-                    key = SDLK_PAUSE; // map Ctrl+Break to raw PAUSE
-#endif
         }
         else {
 #if defined (WIN32)

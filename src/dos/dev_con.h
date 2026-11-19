@@ -38,6 +38,7 @@ extern unsigned char pc98_function_row_mode;
 
 Bitu INT10_Handler(void);
 Bitu INT16_Handler_Wrap(void);
+void INT16_ReadKeyForDOS();
 
 bool inhibited_ControlFn(void);
 void pc98_function_row_user_toggle(void);
@@ -885,7 +886,7 @@ bool device_CON::Read(uint8_t * data,uint16_t * size) {
         if (IS_PC98_ARCH)
             INT16_Handler_Wrap();
         else
-            CALLBACK_RunRealInt(0x16);
+            INT16_ReadKeyForDOS();
 
         /* hack for DOSKEY emulation */
         last_int16_code = reg_ax;

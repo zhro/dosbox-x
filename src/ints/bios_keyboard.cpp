@@ -33,6 +33,7 @@
 #include "render.h"
 
 extern bool kana_input;
+extern bool DOS_BreakConioFlag;
 
 #if defined(_MSC_VER)
 # pragma warning(disable:4244) /* const fmath::local::uint64_t to double possible loss of data */
@@ -596,6 +597,27 @@ static void empty_keyboard_buffer() {
 
 void KEYBOARD_SetLEDs(uint8_t bits);
 bool ctrlbrk=false;
+
+static bool int16_read_for_dos = false;
+
+void INT16_ReadKeyForDOS() {
+    struct DOSKeyboardRead {
+        const bool previous = int16_read_for_dos;
+
+        DOSKeyboardRead() { int16_read_for_dos = true; }
+        ~DOSKeyboardRead() { int16_read_for_dos = previous; }
+    } read;
+
+    CALLBACK_RunRealInt(0x16);
+}
+
+static void INT16_ReturnKey(uint16_t key) {
+    // A direct BIOS read consumes Ctrl+C. CON reads pass it on to DOS.
+    if (!IS_PC98_ARCH && key == 0x2e03 && !int16_read_for_dos &&
+        !DOS_BreakConioFlag)
+        ctrlbrk = false;
+    reg_ax = key;
+}
 
 /* the scancode is in reg_al */
 static Bitu IRQ1_Handler(void) {
@@ -1310,7 +1332,6 @@ extern void IME_SetEnable(int state);
 #endif
 
 extern bool DOS_BreakFlag;
-extern bool DOS_BreakConioFlag;
 extern bool INT28_AllowOnce;
 
 bool int16_unmask_irq1_on_read = true;
@@ -1333,7 +1354,7 @@ Bitu INT16_Handler(void) {
         INT28_AllowOnce = true;
         if ((get_key(temp)) && (!IsEnhancedKey(temp))) {
             /* normal key found, return translated key in ax */
-            reg_ax=temp;
+            INT16_ReturnKey(temp);
         } else {
             /* enter small idle loop to allow for irqs to happen */
             reg_ip+=1;
@@ -1356,7 +1377,7 @@ Bitu INT16_Handler(void) {
                 /* special enhanced key, clear low part before returning key */
                 if(!IsKanjiCode(temp)) temp&=0xff00;
             }
-            reg_ax=temp;
+            INT16_ReturnKey(temp);
         } else {
             /* enter small idle loop to allow for irqs to happen */
             reg_ip+=1;

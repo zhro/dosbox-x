@@ -1267,17 +1267,28 @@ static Bitu DOS_21Handler(void) {
                 reg_al=c;
                 break;
             }
-        case 0x08:      /* Direct Character Input, without echo (checks for breaks officially :)*/
-            {
-                uint8_t c;uint16_t n=1;
-                DOS_ReadFile (STDIN,&c,&n);
-                if(c == 3 && ctrlbrk) {
-                    DOS_BreakAction();
-                    if (!DOS_BreakTest()) return CBRET_NONE;
-                }
-                reg_al=c;
-                break;
-            }
+		case 0x08: {    /* Character input without echo, with break checking */
+		    uint8_t c;
+		    for (;;) {
+		        uint16_t n = 1;
+		        c = 0;
+		        // CON can supply 03h even when the read reports an error.
+		        DOS_ReadFile(STDIN, &c, &n);
+		        if (n != 1 || c != 3) break;
+
+		        const auto handle = RealHandle(STDIN);
+		        auto *input = handle < DOS_FILES ? Files[handle] : nullptr;
+		        const bool from_file = input && !input->IsName("CON") &&
+		            !(input->GetInformation() & DeviceInfoFlags::Device);
+
+		        if (!ctrlbrk && !from_file) break;
+		        DOS_BreakAction();
+		        if (!DOS_BreakTest()) return CBRET_NONE;
+		        if (!from_file) break;
+		    }
+		    reg_al = c;
+		    break;
+		}
         case 0x09:      /* Write string to STDOUT */
             {
                 uint8_t c=0;uint16_t n=1;

@@ -196,6 +196,8 @@ void ShutFontHandle(void);
 void DOSBox_SetSysMenu(void);
 void runRescan(const char *str);
 bool GFX_GetPreventFullscreen(void);
+bool INT16_peek_key(uint16_t& code);
+bool INT16_get_key(uint16_t& code);
 
 bool DOS_IS_IN_HMA() {
 	if (dos_in_hma && XMS_IS_ACTIVE() && XMS_HMA_EXISTS())
@@ -675,6 +677,14 @@ bool DOS_BreakTest(bool print=true) {
 		bool terminate = true;
 		bool terminint23 = false;
 		Bitu save_sp = reg_sp;
+
+        // Consume the BIOS Ctrl+Break marker before dispatching INT 23h.
+        if(DOS_BreakConioFlag && !IS_PC98_ARCH) {
+            uint16_t key;
+            if(INT16_peek_key(key) && key == 0)
+                INT16_get_key(key);
+            ctrlbrk = false;
+        }
 
 		/* print ^C on the console */
 		if (print) DOS_PrintCBreak();
@@ -1235,6 +1245,13 @@ static Bitu DOS_21Handler(void) {
             {
                 uint8_t c;uint16_t n=1;
                 DOS_ReadFile (STDIN,&c,&n);
+                if(c == 3 && ctrlbrk) {
+                    const auto handle = RealHandle(STDIN);
+                    if(handle < DOS_FILES && Files[handle] &&
+                        Files[handle]->IsName("CON")) {
+                        ctrlbrk = false; // Reset Ctrl+C/Break latch because CON input already consumed it 
+                    }
+                }
                 reg_al=c;
                 break;
             }
@@ -1242,7 +1259,12 @@ static Bitu DOS_21Handler(void) {
             {
                 uint8_t c;uint16_t n=1;
                 DOS_ReadFile (STDIN,&c,&n);
-                if (c == 3) {
+                if(c == 3 && ctrlbrk) {
+                    const auto handle = RealHandle(STDIN);
+                    if(handle < DOS_FILES && Files[handle] &&
+                        Files[handle]->IsName("CON")) {
+                        ctrlbrk = false; // Reset Ctrl+C/Break latch because CON input already consumed it 
+                    }
                     DOS_BreakAction();
                     if (!DOS_BreakTest()) return CBRET_NONE;
                 }

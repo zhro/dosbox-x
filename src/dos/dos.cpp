@@ -644,7 +644,27 @@ void CALLBACK_RunRealInt_retcsip(uint8_t intnum,Bitu &cs,Bitu &ip);
 char appname[DOSNAMEBUF+2+DOS_NAMELENGTH_ASCII], appargs[CTBUF];
 //! \brief Is a DOS program running ? (set by INT21 4B/4C)
 bool dos_program_running = false;
-bool DOS_BreakINT23InProgress = false;
+struct DOS_BreakFrame {
+    uint16_t psp;
+    const DOS_BreakFrame *previous;
+};
+
+struct DOS_BreakTermination {
+    const DOS_BreakFrame *target;
+};
+
+static const DOS_BreakFrame *dos_break_frame = nullptr;
+
+static const DOS_BreakFrame *DOS_FindBreakFrame(uint16_t psp) {
+    // A guest can abandon INT 23h with a stack switch and longjmp. When it
+    // eventually exits, unwind all outstanding callbacks for its PSP.
+    const DOS_BreakFrame *target = nullptr;
+    for (auto *frame = dos_break_frame; frame; frame = frame->previous) {
+        if (frame->psp == psp)
+            target = frame;
+    }
+    return target;
+}
 
 void DOS_InitClock() {
 	if (IS_PC98_ARCH) {
@@ -675,7 +695,6 @@ bool DOS_BreakTest(bool print=true) {
 	if (DOS_BreakFlag) {
 		/* NTS: DOS calls are allowed within INT 23h! */
 		bool terminate = true;
-		bool terminint23 = false;
 		Bitu save_sp = reg_sp;
 
         // Consume the BIOS Ctrl+Break marker before dispatching INT 23h.
@@ -709,54 +728,41 @@ bool DOS_BreakTest(bool print=true) {
 		 *                  replaces the vector.
 		 *
 		 *      FIXME: This is an ugly hack! */
+		// A child launched after a guest stack switch can exit independently.
+		const DOS_BreakFrame frame{dos.psp(), dos_break_frame};
+		dos_break_frame = &frame;
 		try {
-			DOS_BreakINT23InProgress = true;
 			CALLBACK_RunRealInt(0x23);
-			DOS_BreakINT23InProgress = false;
-		}
-		catch (int x) {
-			// The interrupt may have been interrupted by a reboot or other emulator
-			// control signal. That signal must not leave this transient state set.
-			DOS_BreakINT23InProgress = false;
-
-			/* 2025/01/20: The throw code used to be int(0) but if that were allowed to bubble up
-			 *             to the main function it would be mistaken as an entirely different
-			 *             signal, so instead use int(9000), a number high enough not to conflict
-			 *             but just low enough to prevent Vegeta from saying his well-known
-			 *             meme-worthy phrase. */
-			if (x == 9000) {
-				terminint23 = true;
-			}
-			else {
-				LOG_MSG("Unexpected code in INT 23h termination exception\n");
+		} catch (const DOS_BreakTermination &exit) {
+			dos_break_frame = frame.previous;
+			if (exit.target != &frame)
 				throw;
-			}
+			*appname = 0;
+			*appargs = 0;
+			return false;
+		} catch (...) {
+			dos_break_frame = frame.previous;
+			throw;
 		}
+		dos_break_frame = frame.previous;
 
-		/* if the INT 23h handler did not already terminate itself... */
-		if (!terminint23) {
-			/* if it returned with IRET, or with RETF and CF=0, don't terminate */
-			if (reg_sp == save_sp || (reg_flags & 1) == 0) {
-				terminate = false;
-				LOG_MSG("Note: DOS handler does not wish to terminate\n");
-			}
-			else {
-				/* program does not wish to continue. it used RETF. pop the remaining flags off */
-				LOG_MSG("Note: DOS handler does wish to terminate\n");
-			}
-
-			if (reg_sp != save_sp) reg_sp += 2;
+		/* IRET, or RETF with CF clear, means keep running. */
+		if (reg_sp == save_sp || (reg_flags & 1) == 0) {
+			terminate = false;
+			LOG_MSG("Note: DOS handler does not wish to terminate\n");
+		} else {
+			LOG_MSG("Note: DOS handler does wish to terminate\n");
 		}
+		if (reg_sp != save_sp) reg_sp += 2;
 
 		if (terminate) {
 			LOG_MSG("Note: DOS break terminating program\n");
-			DOS_Terminate(dos.psp(),false,0);
+			const auto psp = dos.psp();
+			DOS_Terminate(psp,false,0);
+			if (const auto *target = DOS_FindBreakFrame(psp))
+				throw DOS_BreakTermination{target};
 			*appname=0;
 			*appargs=0;
-			return false;
-		}
-		else if (terminint23) {
-			LOG_MSG("Note: DOS break handler terminated program for us.\n");
 			return false;
 		}
 	}
@@ -1118,7 +1124,8 @@ static Bitu DOS_21Handler(void) {
     
     if (reg_ah!=0x4c&&reg_ah!=0x51) {packerr=false;reqwin=false;}
     switch (reg_ah) {
-        case 0x00:      /* Terminate Program */
+        case 0x00: {    /* Terminate Program */
+            uint16_t psp;
             /* HACK for demoscene prod parties/1995/wired95/surprisecode/w95spcod.zip/WINNERS/SURP-KLF
              *
              * This demo starts off by popping 3 words off the stack (the third into ES to get the top
@@ -1143,18 +1150,21 @@ static Bitu DOS_21Handler(void) {
 
                 LOG(LOG_DOSMISC,LOG_DEBUG)("DOS:INT 20h/INT 21h AH=00h recovered CS segment %04x",f_cs);
 
-                DOS_Terminate(f_cs,false,0);
+                psp = f_cs;
             } else if (dos.version.major >= 7 && uselfn && mem_readw(SegPhys(ss)+reg_sp) >=0x2700 && mem_readw(SegPhys(ss)+reg_sp+2)/0x100 == 0x90 && dos.psp()/0x100 >= 0xCC)
                 /* Wengier: This case fixes the bug that DIR /S from MS-DOS 7+ could crash hard within DOSBox-X. With this change it should now work properly. */
-                DOS_Terminate(dos.psp(),false,0);
-			else
-                DOS_Terminate(real_readw(SegValue(ss),reg_sp+2),false,0);
+                psp = dos.psp();
+            else
+                psp = real_readw(SegValue(ss),reg_sp+2);
 
-            if (DOS_BreakINT23InProgress) throw int(9000); /* HACK: Ick */
+            DOS_Terminate(psp,false,0);
+            if (const auto *target = DOS_FindBreakFrame(psp))
+                throw DOS_BreakTermination{target};
             dos_program_running = false;
             *appname=0;
             *appargs=0;
             break;
+        }
         case 0x01:      /* Read character from STDIN, with echo */
             {   
                 uint8_t c;uint16_t n=1;
@@ -1810,8 +1820,12 @@ static Bitu DOS_21Handler(void) {
             }
 
             DOS_ResizeMemory(dos.psp(),&reg_dx);
-            DOS_Terminate(dos.psp(),true,reg_al);
-            if (DOS_BreakINT23InProgress) throw int(9000); /* HACK: Ick */
+            {
+                const auto psp = dos.psp();
+                DOS_Terminate(psp,true,reg_al);
+                if (const auto *target = DOS_FindBreakFrame(psp))
+                    throw DOS_BreakTermination{target};
+            }
             dos_program_running = false;
             *appname=0;
             *appargs=0;
@@ -2453,13 +2467,15 @@ static Bitu DOS_21Handler(void) {
             }
             break;
             //TODO Check for use of execution state AL=5
-        case 0x4c:                  /* EXIT Terminate with return code */
-            DOS_Terminate(dos.psp(),false,reg_al);
+        case 0x4c: {                /* EXIT Terminate with return code */
+            const auto psp = dos.psp();
+            DOS_Terminate(psp,false,reg_al);
             if (result_errorcode) {
                 dos.return_code = result_errorcode;
                 result_errorcode = 0;
             }
-            if (DOS_BreakINT23InProgress) throw int(9000); /* HACK: Ick */
+            if (const auto *target = DOS_FindBreakFrame(psp))
+                throw DOS_BreakTermination{target};
 #if defined (WIN32) && !defined(HX_DOS) && !defined(_WIN32_WINDOWS)
             if (winautorun&&reqwin&&*appname&&!control->SecureMode())
                 HostAppRun();
@@ -2476,6 +2492,7 @@ static Bitu DOS_21Handler(void) {
              * version on various abandonware sites that do not have this bug. */
             reg_ax=0x3E01;
             break;
+        }
         case 0x4d:                  /* Get Return code */
             reg_al=dos.return_code;/* Officially read from SDA and clear when read */
             reg_ah=dos.return_mode;
@@ -3384,7 +3401,8 @@ static Bitu DOS_27Handler(void) {
 	uint16_t psp = dos.psp(); //mem_readw(SegPhys(ss)+reg_sp+2);
 	if (DOS_ResizeMemory(psp,&para)) {
 		DOS_Terminate(psp,true,0);
-		if (DOS_BreakINT23InProgress) throw int(9000); /* HACK: Ick */
+		if (const auto *target = DOS_FindBreakFrame(psp))
+			throw DOS_BreakTermination{target};
 	}
 	return CBRET_NONE;
 }

@@ -762,6 +762,7 @@ bool DOS_BreakTest(bool print=true) {
 			LOG_MSG("Note: DOS break terminating program\n");
 			const auto psp = dos.psp();
 			DOS_Terminate(psp,false,0);
+			dos.return_mode = RETURN_CTRLC;
 			if (const auto *target = DOS_FindBreakFrame(psp))
 				throw DOS_BreakTermination{target};
 			*appname=0;
